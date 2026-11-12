@@ -2,6 +2,12 @@
 
 Small personal tools.
 
+## CLI tools
+
+| Tool | What it does |
+| --- | --- |
+| [exo](exo) | Local Excalidraw editor — open `.excalidraw` files in the browser (mo-style). |
+
 ## Chrome extensions
 
 See [chrome-extensions/](chrome-extensions/README.md) for how to build and load them.
