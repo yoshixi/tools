@@ -65,14 +65,14 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Build
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Test
         run: pnpm test
-
-      - name: Build publish artifacts
-        run: pnpm build
 
       - name: Publish to npm
         run: pnpm publish --access public --no-git-checks --tag "${{ steps.version.outputs.dist_tag }}"
