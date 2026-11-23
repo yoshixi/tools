@@ -2,6 +2,8 @@
 
 Local Excalidraw editor. Opens `.excalidraw` files in the browser, saves back to disk, and watches for external changes — mo-style.
 
+Agents changing this package: read **[AGENTS.md](./AGENTS.md)** first.
+
 ## Install
 
 ```bash
