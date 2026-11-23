@@ -38,3 +38,60 @@ export function resolveNewDrawingPath(
 export function displayName(absPath: string): string {
   return path.basename(absPath);
 }
+
+/** True when filePath is the workspace root or a path inside it. */
+export function isInsideWorkspace(filePath: string, workspaceRoot: string): boolean {
+  const resolvedFile = path.resolve(filePath);
+  const resolvedRoot = path.resolve(workspaceRoot);
+  const rel = path.relative(resolvedRoot, resolvedFile);
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
+}
+
+export function assertInsideWorkspace(
+  filePath: string,
+  workspaceRoot: string,
+): void {
+  if (!isInsideWorkspace(filePath, workspaceRoot)) {
+    throw new Error(
+      `file is outside the workspace (${workspaceRoot}): ${filePath}`,
+    );
+  }
+}
+
+function splitExcalidrawName(fileName: string): { stem: string; suffix: string } {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".excalidraw.json")) {
+    return {
+      stem: fileName.slice(0, -".excalidraw.json".length),
+      suffix: ".excalidraw.json",
+    };
+  }
+  if (lower.endsWith(".excalidraw")) {
+    return {
+      stem: fileName.slice(0, -".excalidraw".length),
+      suffix: ".excalidraw",
+    };
+  }
+  return { stem: fileName, suffix: ".excalidraw" };
+}
+
+/**
+ * Next free path for a duplicate, Finder-style:
+ * sketch.excalidraw → sketch copy.excalidraw → sketch copy 2.excalidraw
+ */
+export function nextAvailableCopyPath(
+  sourcePath: string,
+  existsSync: (candidate: string) => boolean,
+): string {
+  const dir = path.dirname(sourcePath);
+  const { stem, suffix } = splitExcalidrawName(path.basename(sourcePath));
+  const baseMatch = /^(.*?)(?: copy(?: (\d+))?)?$/.exec(stem);
+  const base = (baseMatch?.[1] || stem).trim() || "drawing";
+
+  for (let n = 1; n < 10_000; n++) {
+    const label = n === 1 ? `${base} copy` : `${base} copy ${n}`;
+    const candidate = path.join(dir, `${label}${suffix}`);
+    if (!existsSync(candidate)) return candidate;
+  }
+  throw new Error("could not find a free copy name");
+}

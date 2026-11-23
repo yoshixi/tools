@@ -1,6 +1,11 @@
 import { DEFAULT_HOST, DEFAULT_PORT } from "./state.js";
 
+export type CliCommand = "open" | "export";
+
+export type ExportFormatArg = "png" | "svg";
+
 export type CliArgs = {
+  command: CliCommand;
   paths: string[];
   port: number;
   host: string;
@@ -12,10 +17,18 @@ export type CliArgs = {
   version: boolean;
   serve: boolean;
   recursive: boolean;
+  /** Internal: workspace root for --serve */
+  cwd: string | null;
+  /** exo export -o */
+  output: string | null;
+  exportFormat: ExportFormatArg | null;
+  exportScale: number;
+  exportBackground: boolean;
 };
 
 export function parseArgs(argv: readonly string[]): CliArgs {
   const args: CliArgs = {
+    command: "open",
     paths: [],
     port: DEFAULT_PORT,
     host: DEFAULT_HOST,
@@ -27,9 +40,20 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     version: false,
     serve: false,
     recursive: false,
+    cwd: null,
+    output: null,
+    exportFormat: null,
+    exportScale: 2,
+    exportBackground: true,
   };
 
-  for (let i = 0; i < argv.length; i++) {
+  let i = 0;
+  if (argv[0] === "export") {
+    args.command = "export";
+    i = 1;
+  }
+
+  for (; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--help" || a === "-h") args.help = true;
     else if (a === "--version" || a === "-v") args.version = true;
@@ -38,8 +62,30 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     else if (a === "--shutdown") args.shutdown = true;
     else if (a === "--serve") args.serve = true;
     else if (a === "--recursive" || a === "-R") args.recursive = true;
-    else if (a === "--no-open") args.open = false;
+    else if (a === "--cwd") {
+      const value = argv[++i];
+      if (!value) throw new Error("--cwd requires a value");
+      args.cwd = value;
+    } else if (a === "--no-open") args.open = false;
     else if (a === "--open") args.open = true;
+    else if (a === "-o" || a === "--output") {
+      const value = argv[++i];
+      if (!value) throw new Error(`${a} requires a value`);
+      args.output = value;
+    } else if (a === "--format") {
+      const value = argv[++i];
+      if (value !== "png" && value !== "svg") {
+        throw new Error(`--format must be png or svg (got ${value ?? "nothing"})`);
+      }
+      args.exportFormat = value;
+    } else if (a === "--scale") {
+      const value = argv[++i];
+      if (!value) throw new Error("--scale requires a value");
+      args.exportScale = Number(value);
+      if (!Number.isFinite(args.exportScale) || args.exportScale <= 0) {
+        throw new Error(`invalid --scale: ${value}`);
+      }
+    } else if (a === "--no-background") args.exportBackground = false;
     else if (a === "--port" || a === "-p") {
       const value = argv[++i];
       if (!value) throw new Error("--port requires a value");
@@ -52,7 +98,6 @@ export function parseArgs(argv: readonly string[]): CliArgs {
       if (!value) throw new Error("--bind requires a value");
       args.host = value;
     } else if (a.startsWith("-") && a !== "-" && !a.startsWith("--")) {
-      // mo-style combined shorts: -Rf, -fR, …
       applyShortCluster(a.slice(1), args);
     } else if (a.startsWith("-")) {
       throw new Error(`unknown flag: ${a}`);
@@ -70,7 +115,9 @@ function applyShortCluster(cluster: string, args: CliArgs): void {
     else if (ch === "v") args.version = true;
     else if (ch === "f") args.foreground = true;
     else if (ch === "R") args.recursive = true;
-    else if (ch === "p" || ch === "b") {
+    else if (ch === "o") {
+      throw new Error("-o cannot be combined in a short cluster (needs a value)");
+    } else if (ch === "p" || ch === "b") {
       throw new Error(`-${ch} cannot be combined in a short cluster (needs a value)`);
     } else {
       throw new Error(`unknown flag: -${ch}`);

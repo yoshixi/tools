@@ -1,0 +1,45 @@
+name: exo CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "exo/**"
+      - ".github/workflows/exo-ci.yml"
+  pull_request:
+    paths:
+      - "exo/**"
+      - ".github/workflows/exo-ci.yml"
+
+concurrency:
+  group: exo-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build + test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: exo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: exo/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test

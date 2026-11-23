@@ -3,6 +3,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   isExcalidrawPath,
+  isInsideWorkspace,
+  nextAvailableCopyPath,
   resolveExcalidrawPath,
   resolveNewDrawingPath,
 } from "./paths.js";
@@ -42,5 +44,30 @@ test("resolveNewDrawingPath keeps an explicit .excalidraw suffix", () => {
   assert.equal(
     resolveNewDrawingPath("box.excalidraw", "/work"),
     path.join("/work", "box.excalidraw"),
+  );
+});
+
+test("isInsideWorkspace accepts files under the workspace root", () => {
+  assert.equal(
+    isInsideWorkspace("/work/exo-files/a.excalidraw", "/work/exo-files"),
+    true,
+  );
+});
+
+test("isInsideWorkspace rejects files outside the workspace root", () => {
+  assert.equal(
+    isInsideWorkspace("/work/other/a.excalidraw", "/work/exo-files"),
+    false,
+  );
+});
+
+test("nextAvailableCopyPath uses Finder-style copy names", () => {
+  const existing = new Set([
+    "/work/sketch.excalidraw",
+    "/work/sketch copy.excalidraw",
+  ]);
+  assert.equal(
+    nextAvailableCopyPath("/work/sketch.excalidraw", (p) => existing.has(p)),
+    "/work/sketch copy 2.excalidraw",
   );
 });

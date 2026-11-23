@@ -6,7 +6,7 @@ Small personal tools.
 
 | Tool | What it does |
 | --- | --- |
-| [exo](exo) | Local Excalidraw editor — open `.excalidraw` files in the browser (mo-style). |
+| [exo](exo) (`@yoshixi/exo`) | Local Excalidraw editor — open `.excalidraw` files in the browser (mo-style). |
 
 ## Chrome extensions
 

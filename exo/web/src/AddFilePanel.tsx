@@ -164,7 +164,9 @@ export default function AddFilePanel({ open, onClose, onOpened }: Props) {
           </button>
         </div>
         <p className="add-hint" title={targetDir ?? undefined}>
-          {createDir ? "Creates in chosen folder" : "Creates in server folder"}
+          {createDir
+            ? "Creates in chosen folder (must stay in workspace)"
+            : "Creates in workspace"}
           {targetDir ? ` · ${targetDir}` : ""}
         </p>
       </form>

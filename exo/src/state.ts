@@ -9,6 +9,7 @@ export type ServerState = {
   pid: number;
   port: number;
   host: string;
+  cwd: string;
   startedAt: string;
   version: string;
 };

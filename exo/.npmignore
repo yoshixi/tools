@@ -1,0 +1,5 @@
+src/
+web/
+test/
+**/*.test.js
+s

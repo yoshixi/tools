@@ -1,0 +1,106 @@
+# Publish @yoshixi/exo to npm and create a GitHub Release.
+#
+# Cut a release:
+#   1. Bump exo/package.json "version" (and keep cli VERSION in sync if needed)
+#   2. Commit on main
+#   3. git tag exo-vX.Y.Z && git push origin exo-vX.Y.Z
+#
+# Requires repo secret NPM_TOKEN (npm automation / granular publish token)
+# with permission to publish @yoshixi/exo. Optional: configure npm trusted
+# publishing for this workflow; provenance is enabled via publishConfig.
+
+name: exo Release
+
+on:
+  push:
+    tags:
+      - "exo-v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: exo-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, publish, release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: exo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: exo/pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - name: Assert tag matches package.json version
+        id: version
+        working-directory: .
+        run: |
+          TAG="${GITHUB_REF_NAME#exo-v}"
+          PKG="$(node -p "require('./exo/package.json').version")"
+          echo "tag=$TAG pkg=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag exo-v$TAG does not match exo/package.json version $PKG"
+            exit 1
+          fi
+          case "$PKG" in
+            *-*) echo "dist_tag=next" >> "$GITHUB_OUTPUT" ;;
+            *) echo "dist_tag=latest" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build publish artifacts
+        run: pnpm build
+
+      - name: Publish to npm
+        run: pnpm publish --access public --no-git-checks --tag "${{ steps.version.outputs.dist_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          NOTES="$(cat <<EOF
+          ## @yoshixi/exo v${VERSION}
+
+          Install:
+          \`\`\`bash
+          npm install -g @yoshixi/exo
+          # or: pnpm add -g @yoshixi/exo
+          exo --help
+          \`\`\`
+
+          Export (no browser):
+          \`\`\`bash
+          exo export diagram.excalidraw
+          \`\`\`
+          EOF
+          )"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "@yoshixi/exo v${VERSION}" \
+            --notes "$NOTES"

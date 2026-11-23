@@ -45,10 +45,12 @@ export default function App() {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [workspace, setWorkspace] = useState<string | null>(null);
 
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const saveTimer = useRef<number | null>(null);
   const applyingExternal = useRef(false);
+  const revisionRef = useRef<number | null>(null);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
@@ -64,7 +66,8 @@ export default function App() {
       const body = (await res.json().catch(() => null)) as { error?: string } | null;
       throw new Error(body?.error ?? `failed to load ${id}`);
     }
-    const data = (await res.json()) as { scene: Scene };
+    const data = (await res.json()) as { scene: Scene; revision: number };
+    revisionRef.current = data.revision;
     applyingExternal.current = true;
     setScene(data.scene);
     setSceneKey((k) => k + 1);
@@ -77,9 +80,14 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/files");
-        const data = (await res.json()) as { files: OpenFile[] };
+        const [filesRes, statusRes] = await Promise.all([
+          fetch("/api/files"),
+          fetch("/api/status"),
+        ]);
+        const data = (await filesRes.json()) as { files: OpenFile[] };
+        const status = (await statusRes.json()) as { cwd?: string };
         if (cancelled) return;
+        setWorkspace(status.cwd ?? null);
         setFiles(data.files);
         setActiveId((current) => {
           if (current && data.files.some((f) => f.id === current)) return current;
@@ -127,10 +135,19 @@ export default function App() {
       });
     });
     es.addEventListener("file-changed", (ev) => {
-      const payload = JSON.parse((ev as MessageEvent).data) as { id: string };
+      const payload = JSON.parse((ev as MessageEvent).data) as {
+        id: string;
+        revision?: number;
+      };
       if (payload.id !== activeIdRef.current) return;
-      // Still allow reload while a save debounce is pending: disk is source of truth
-      // for external edits. Clear the pending save so it cannot overwrite the reload.
+      // Our own PUT already updated revisionRef — skip the echo remount.
+      if (
+        payload.revision != null &&
+        payload.revision === revisionRef.current
+      ) {
+        return;
+      }
+      // Disk (or another tab) is newer. Drop any pending stale save.
       if (saveTimer.current !== null) {
         window.clearTimeout(saveTimer.current);
         saveTimer.current = null;
@@ -161,6 +178,7 @@ export default function App() {
       setSaveState("saving");
       try {
         const body = {
+          baseRevision: revisionRef.current,
           scene: {
             type: "excalidraw" as const,
             version: 2,
@@ -179,17 +197,27 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+        if (res.status === 409) {
+          // Another tab (or editor) saved first — reload and discard this draft.
+          await loadScene(id);
+          setSaveState("idle");
+          setError("Reloaded — another tab had a newer version");
+          return;
+        }
         if (!res.ok) {
           const text = await res.text();
           throw new Error(text || "save failed");
         }
+        const data = (await res.json()) as { revision: number };
+        revisionRef.current = data.revision;
+        setError(null);
         setSaveState("saved");
       } catch (err) {
         setSaveState("error");
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [],
+    [loadScene],
   );
 
   const onChange = useCallback(
@@ -216,7 +244,11 @@ export default function App() {
         <div className="brand">
           ex<span>o</span>
         </div>
-        <p className="hint">Local Excalidraw files. Edits save to disk.</p>
+        <p className="hint" title={workspace ?? undefined}>
+          {workspace
+            ? `Workspace: ${workspace}`
+            : "Local Excalidraw files. Edits save to disk."}
+        </p>
         <button
           type="button"
           className="add-file-btn"
@@ -236,10 +268,10 @@ export default function App() {
         />
         <ul className="file-list">
           {files.map((file) => (
-            <li key={file.id}>
+            <li key={file.id} className="file-row">
               <button
                 type="button"
-                className={file.id === activeId ? "active" : undefined}
+                className={`file-open ${file.id === activeId ? "active" : ""}`}
                 onClick={() => {
                   setActiveId(file.id);
                   const url = new URL(window.location.href);
@@ -250,6 +282,39 @@ export default function App() {
               >
                 <span className="file-name">{file.name}</span>
                 <span className="file-path">{file.path}</span>
+              </button>
+              <button
+                type="button"
+                className="file-copy-btn"
+                title={`Copy ${file.name}`}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      setError(null);
+                      const res = await fetch(
+                        `/api/files/${encodeURIComponent(file.id)}/copy`,
+                        { method: "POST" },
+                      );
+                      const body = (await res.json()) as {
+                        opened?: { id: string };
+                        error?: string;
+                      };
+                      if (!res.ok || !body.opened) {
+                        throw new Error(body.error ?? "copy failed");
+                      }
+                      setActiveId(body.opened.id);
+                      const url = new URL(window.location.href);
+                      url.searchParams.set("file", body.opened.id);
+                      window.history.replaceState({}, "", url);
+                    } catch (err) {
+                      setError(
+                        err instanceof Error ? err.message : String(err),
+                      );
+                    }
+                  })();
+                }}
+              >
+                Copy
               </button>
             </li>
           ))}
