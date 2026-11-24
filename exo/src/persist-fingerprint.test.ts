@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { persistFingerprint } from "./persist-fingerprint.js";
+import {
+  persistFingerprint,
+  sceneContentKey,
+} from "./persist-fingerprint.js";
 
 const baseEl = {
   id: "a",
+  type: "rectangle",
+  x: 10,
+  y: 20,
+  width: 100,
+  height: 50,
   version: 1,
   versionNonce: 10,
   isDeleted: false,
@@ -44,5 +52,31 @@ test("persistFingerprint changes when background color changes", () => {
 test("persistFingerprint changes when a file id is added", () => {
   const before = persistFingerprint([baseEl], baseApp, []);
   const after = persistFingerprint([baseEl], baseApp, ["file-1"]);
+  assert.notEqual(before, after);
+});
+
+test("sceneContentKey stays stable when only version fields churn", () => {
+  const before = sceneContentKey([baseEl], baseApp, []);
+  const after = sceneContentKey(
+    [{ ...baseEl, version: 9, versionNonce: 99, updated: 123, seed: 7 }],
+    baseApp,
+    [],
+  );
+  assert.equal(before, after);
+});
+
+test("sceneContentKey changes when geometry changes", () => {
+  const before = sceneContentKey([baseEl], baseApp, []);
+  const after = sceneContentKey([{ ...baseEl, x: 99 }], baseApp, []);
+  assert.notEqual(before, after);
+});
+
+test("sceneContentKey changes when an element is added", () => {
+  const before = sceneContentKey([baseEl], baseApp, []);
+  const after = sceneContentKey(
+    [baseEl, { ...baseEl, id: "b", x: 5 }],
+    baseApp,
+    [],
+  );
   assert.notEqual(before, after);
 });
