@@ -36,7 +36,7 @@ pnpm install
 pnpm build          # web + cli (clears dist/)
 pnpm typecheck
 pnpm test           # build:test + node:test (needs dist/client → run build first in CI)
-pnpm test:e2e       # Playwright; only when changing real browser UX
+pnpm test:e2e       # Playwright (Chromium); includes no-reload GET spam check
 ```
 
 Node **≥ 24**. Package manager: **pnpm** (see `packageManager` in `package.json`).
