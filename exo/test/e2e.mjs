@@ -167,6 +167,111 @@ try {
   });
 
   await step(
+    "a stroke drawn right after load still reaches disk",
+    async () => {
+      // Regression: settle/adopt logic used to mark early strokes as already
+      // persisted, so they never reached disk (looked like a flaky reload loss).
+      const earlyPath = path.join(workspace, "early.excalidraw");
+      fs.writeFileSync(earlyPath, `${JSON.stringify(emptyScene(), null, 2)}\n`);
+      const addedEarly = await addFile(url, earlyPath);
+      const earlyId = addedEarly.files.find((f) => f.id !== fileId)?.id;
+      assert.ok(earlyId, "expected a new file id for early.excalidraw");
+
+      let putCount = 0;
+      const onReq = (req) => {
+        if (req.method() === "PUT" && req.url().includes(`/api/files/${earlyId}`)) {
+          putCount += 1;
+        }
+      };
+      page.on("request", onReq);
+
+      await page.goto(`${url}/?file=${earlyId}`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForSelector(".excalidraw", { timeout: 30000 });
+      const drawSurface = page.locator("canvas.excalidraw__canvas.interactive");
+      await drawSurface.waitFor({ state: "visible" });
+      await page.getByRole("radio", { name: "Rectangle" }).click({ force: true });
+      const box = await drawSurface.boundingBox();
+      assert.ok(box);
+      await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.25);
+      await page.mouse.down();
+      await page.mouse.move(
+        box.x + box.width * 0.55,
+        box.y + box.height * 0.55,
+        { steps: 10 },
+      );
+      await page.mouse.up();
+
+      const start = Date.now();
+      let live = [];
+      while (Date.now() - start < 10000) {
+        const scene = JSON.parse(fs.readFileSync(earlyPath, "utf8"));
+        live = (scene.elements ?? []).filter((el) => !el.isDeleted);
+        if (live.length > 0) break;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      page.off("request", onReq);
+      assert.ok(
+        live.length > 0,
+        `expected early stroke to persist (elements=${live.length}, puts=${putCount})`,
+      );
+    },
+  );
+
+  await step(
+    "reload before debounce still keeps the last stroke on disk",
+    async () => {
+      const flushPath = path.join(workspace, "flush.excalidraw");
+      fs.writeFileSync(flushPath, `${JSON.stringify(emptyScene(), null, 2)}\n`);
+      const addedFlush = await addFile(url, flushPath);
+      const flushId = addedFlush.files.find(
+        (f) => f.name === "flush.excalidraw",
+      )?.id;
+      assert.ok(flushId);
+
+      await page.goto(`${url}/?file=${flushId}`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForSelector(".excalidraw", { timeout: 30000 });
+      // Let the post-load settle window end so this step isolates pagehide flush.
+      await page.waitForTimeout(1200);
+
+      await page.getByRole("radio", { name: "Rectangle" }).click({ force: true });
+      const drawSurface = page.locator("canvas.excalidraw__canvas.interactive");
+      const box = await drawSurface.boundingBox();
+      assert.ok(box);
+      await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+      await page.mouse.down();
+      await page.mouse.move(
+        box.x + box.width * 0.6,
+        box.y + box.height * 0.6,
+        { steps: 10 },
+      );
+      await page.mouse.up();
+      // Beat the 700ms debounce — pagehide must flush the pending PUT.
+      await page.waitForTimeout(150);
+      await page.goto(`${url}/?file=${flushId}`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForSelector(".excalidraw", { timeout: 30000 });
+
+      const start = Date.now();
+      let live = [];
+      while (Date.now() - start < 8000) {
+        const scene = JSON.parse(fs.readFileSync(flushPath, "utf8"));
+        live = (scene.elements ?? []).filter((el) => !el.isDeleted);
+        if (live.length > 0) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.ok(
+        live.length > 0,
+        "expected pagehide flush to persist stroke before reload",
+      );
+    },
+  );
+
+  await step(
     "idle interaction does not keep GETting /api/files/:id",
     async () => {
       let sceneGets = 0;
@@ -258,7 +363,7 @@ try {
     );
   });
 
-  console.log(`\n${4} e2e steps passed`);
+  console.log(`\n${6} e2e steps passed`);
 } catch (err) {
   console.error("\nnot ok - e2e failed");
   console.error(err);

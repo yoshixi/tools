@@ -13,7 +13,10 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
-import { persistFingerprint } from "@exo/persist-fingerprint";
+import {
+  persistFingerprint,
+  sceneContentKey,
+} from "@exo/persist-fingerprint";
 import AddFilePanel from "./AddFilePanel";
 
 type OpenFile = {
@@ -60,6 +63,18 @@ function fingerprintScene(
   );
 }
 
+function contentKeyScene(
+  elements: readonly ExcalidrawElement[],
+  appState: Partial<AppState> | AppState,
+  files: BinaryFiles,
+): string {
+  return sceneContentKey(
+    elements,
+    durableAppState(appState),
+    Object.keys(files),
+  );
+}
+
 export default function App() {
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activeId, setActiveId] = useState<string | null>(initialFileId);
@@ -73,11 +88,17 @@ export default function App() {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const saveTimer = useRef<number | null>(null);
   const applyingExternal = useRef(false);
-  /** After load/updateScene, adopt Excalidraw's normalized fingerprint once. */
-  const adoptFingerprintOnce = useRef(false);
+  /** Delay PUTs briefly after apply so late normalize onChanges coalesce. */
   const suppressSavesUntil = useRef(0);
   const revisionRef = useRef<number | null>(null);
   const lastPersistedFp = useRef<string | null>(null);
+  const lastContentKey = useRef<string | null>(null);
+  const pendingPersist = useRef<{
+    id: string;
+    elements: readonly ExcalidrawElement[];
+    appState: AppState;
+    binaryFiles: BinaryFiles;
+  } | null>(null);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
@@ -88,10 +109,15 @@ export default function App() {
 
   const applyScene = useCallback((next: Scene, opts: { remount: boolean }) => {
     applyingExternal.current = true;
-    adoptFingerprintOnce.current = true;
-    // updateScene/onChange runs after paint — keep saves off until then.
+    // Delay scheduled PUTs until Excalidraw finishes normalize onChanges.
     suppressSavesUntil.current = Date.now() + 1000;
+    pendingPersist.current = null;
     lastPersistedFp.current = fingerprintScene(
+      next.elements,
+      next.appState,
+      next.files,
+    );
+    lastContentKey.current = contentKeyScene(
       next.elements,
       next.appState,
       next.files,
@@ -166,6 +192,7 @@ export default function App() {
     if (!activeId) {
       setScene(null);
       lastPersistedFp.current = null;
+      lastContentKey.current = null;
       return;
     }
     let cancelled = false;
@@ -233,13 +260,14 @@ export default function App() {
       elements: readonly ExcalidrawElement[],
       appState: AppState,
       binaryFiles: BinaryFiles,
+      opts?: { keepalive?: boolean },
     ) => {
       const fp = fingerprintScene(elements, appState, binaryFiles);
       if (fp === lastPersistedFp.current) {
         return;
       }
 
-      setSaveState("saving");
+      if (!opts?.keepalive) setSaveState("saving");
       try {
         const body = {
           baseRevision: revisionRef.current,
@@ -256,8 +284,10 @@ export default function App() {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          keepalive: opts?.keepalive === true,
         });
         if (res.status === 409) {
+          if (opts?.keepalive) return;
           await loadScene(id, { remount: false });
           setSaveState("idle");
           setError("Reloaded — another tab had a newer version");
@@ -270,15 +300,65 @@ export default function App() {
         const data = (await res.json()) as { revision: number };
         revisionRef.current = data.revision;
         lastPersistedFp.current = fp;
+        pendingPersist.current = null;
+        if (opts?.keepalive) return;
         setError(null);
         setSaveState("saved");
       } catch (err) {
+        if (opts?.keepalive) return;
         setSaveState("error");
         setError(err instanceof Error ? err.message : String(err));
       }
     },
     [loadScene],
   );
+
+  const schedulePersist = useCallback(
+    (
+      id: string,
+      elements: readonly ExcalidrawElement[],
+      appState: AppState,
+      binaryFiles: BinaryFiles,
+    ) => {
+      pendingPersist.current = { id, elements, appState, binaryFiles };
+      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+      // Wait out the post-apply settle window so late normalize bursts coalesce,
+      // then apply the usual debounce from "now".
+      const settleMs = Math.max(0, suppressSavesUntil.current - Date.now());
+      saveTimer.current = window.setTimeout(() => {
+        saveTimer.current = null;
+        const pending = pendingPersist.current;
+        if (!pending) return;
+        void persist(
+          pending.id,
+          pending.elements,
+          pending.appState,
+          pending.binaryFiles,
+        );
+      }, Math.max(settleMs, SAVE_DEBOUNCE_MS));
+    },
+    [persist],
+  );
+
+  useEffect(() => {
+    const flush = () => {
+      if (saveTimer.current !== null) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      const pending = pendingPersist.current;
+      if (!pending) return;
+      void persist(
+        pending.id,
+        pending.elements,
+        pending.appState,
+        pending.binaryFiles,
+        { keepalive: true },
+      );
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [persist]);
 
   const onChange = useCallback(
     (
@@ -291,15 +371,16 @@ export default function App() {
       if (!id) return;
 
       const fp = fingerprintScene(elements, appState, binaryFiles);
+      const contentKey = contentKeyScene(elements, appState, binaryFiles);
 
-      // After GET/updateScene, Excalidraw normalizes elements. Adopt that
-      // fingerprint without PUT — otherwise we save→SSE→GET in a loop.
-      if (
-        adoptFingerprintOnce.current ||
-        Date.now() < suppressSavesUntil.current
-      ) {
+      // Same durable content, new versionNonce → Excalidraw normalize after
+      // load/updateScene. Never mark a pending edit as already persisted.
+      if (contentKey === lastContentKey.current) {
+        if (pendingPersist.current !== null) {
+          pendingPersist.current = { id, elements, appState, binaryFiles };
+          return;
+        }
         lastPersistedFp.current = fp;
-        adoptFingerprintOnce.current = false;
         return;
       }
 
@@ -308,13 +389,10 @@ export default function App() {
         return;
       }
 
-      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => {
-        saveTimer.current = null;
-        void persist(id, elements, appState, binaryFiles);
-      }, SAVE_DEBOUNCE_MS);
+      lastContentKey.current = contentKey;
+      schedulePersist(id, elements, appState, binaryFiles);
     },
-    [persist],
+    [schedulePersist],
   );
 
   return (
