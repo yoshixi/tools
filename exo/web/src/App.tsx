@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Excalidraw } from "@excalidraw/excalidraw";
+import { CaptureUpdateAction, Excalidraw } from "@excalidraw/excalidraw";
 import type {
   AppState,
   BinaryFiles,
@@ -13,6 +13,7 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
+import { persistFingerprint } from "@exo/persist-fingerprint";
 import AddFilePanel from "./AddFilePanel";
 
 type OpenFile = {
@@ -32,9 +33,31 @@ type Scene = {
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+const SAVE_DEBOUNCE_MS = 700;
+
 function initialFileId(): string | null {
   const id = new URLSearchParams(window.location.search).get("file");
   return id && id.length > 0 ? id : null;
+}
+
+function durableAppState(appState: Partial<AppState> | AppState) {
+  return {
+    viewBackgroundColor: appState.viewBackgroundColor,
+    gridSize: appState.gridSize,
+    theme: appState.theme,
+  };
+}
+
+function fingerprintScene(
+  elements: readonly ExcalidrawElement[],
+  appState: Partial<AppState> | AppState,
+  files: BinaryFiles,
+): string {
+  return persistFingerprint(
+    elements,
+    durableAppState(appState),
+    Object.keys(files),
+  );
 }
 
 export default function App() {
@@ -51,6 +74,7 @@ export default function App() {
   const saveTimer = useRef<number | null>(null);
   const applyingExternal = useRef(false);
   const revisionRef = useRef<number | null>(null);
+  const lastPersistedFp = useRef<string | null>(null);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
@@ -59,22 +83,50 @@ export default function App() {
     [files, activeId],
   );
 
-  const loadScene = useCallback(async (id: string) => {
-    setError(null);
-    const res = await fetch(`/api/files/${encodeURIComponent(id)}`);
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(body?.error ?? `failed to load ${id}`);
-    }
-    const data = (await res.json()) as { scene: Scene; revision: number };
-    revisionRef.current = data.revision;
+  const applyScene = useCallback((next: Scene, opts: { remount: boolean }) => {
     applyingExternal.current = true;
-    setScene(data.scene);
-    setSceneKey((k) => k + 1);
+    lastPersistedFp.current = fingerprintScene(
+      next.elements,
+      next.appState,
+      next.files,
+    );
+    setScene(next);
+
+    const api = apiRef.current;
+    if (!opts.remount && api) {
+      // Soft update — keep camera/selection; avoids full canvas flash.
+      api.updateScene({
+        elements: next.elements,
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      if (next.files && Object.keys(next.files).length > 0) {
+        api.addFiles(Object.values(next.files));
+      }
+    } else {
+      setSceneKey((k) => k + 1);
+    }
+
     queueMicrotask(() => {
       applyingExternal.current = false;
     });
   }, []);
+
+  const loadScene = useCallback(
+    async (id: string, opts: { remount: boolean }) => {
+      setError(null);
+      const res = await fetch(`/api/files/${encodeURIComponent(id)}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(body?.error ?? `failed to load ${id}`);
+      }
+      const data = (await res.json()) as { scene: Scene; revision: number };
+      revisionRef.current = data.revision;
+      applyScene(data.scene, opts);
+    },
+    [applyScene],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -107,12 +159,14 @@ export default function App() {
   useEffect(() => {
     if (!activeId) {
       setScene(null);
+      lastPersistedFp.current = null;
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        await loadScene(activeId);
+        // Switching files needs a remount; live remote edits do not.
+        await loadScene(activeId, { remount: true });
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -140,19 +194,18 @@ export default function App() {
         revision?: number;
       };
       if (payload.id !== activeIdRef.current) return;
-      // Our own PUT already updated revisionRef — skip the echo remount.
+      // Our own PUT already updated revisionRef — skip the echo.
       if (
         payload.revision != null &&
         payload.revision === revisionRef.current
       ) {
         return;
       }
-      // Disk (or another tab) is newer. Drop any pending stale save.
       if (saveTimer.current !== null) {
         window.clearTimeout(saveTimer.current);
         saveTimer.current = null;
       }
-      void loadScene(payload.id).catch((err) => {
+      void loadScene(payload.id, { remount: false }).catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
       });
     });
@@ -175,6 +228,11 @@ export default function App() {
       appState: AppState,
       binaryFiles: BinaryFiles,
     ) => {
+      const fp = fingerprintScene(elements, appState, binaryFiles);
+      if (fp === lastPersistedFp.current) {
+        return;
+      }
+
       setSaveState("saving");
       try {
         const body = {
@@ -184,11 +242,7 @@ export default function App() {
             version: 2,
             source: "exo",
             elements,
-            appState: {
-              viewBackgroundColor: appState.viewBackgroundColor,
-              gridSize: appState.gridSize,
-              theme: appState.theme,
-            },
+            appState: durableAppState(appState),
             files: binaryFiles,
           },
         };
@@ -198,8 +252,7 @@ export default function App() {
           body: JSON.stringify(body),
         });
         if (res.status === 409) {
-          // Another tab (or editor) saved first — reload and discard this draft.
-          await loadScene(id);
+          await loadScene(id, { remount: false });
           setSaveState("idle");
           setError("Reloaded — another tab had a newer version");
           return;
@@ -210,6 +263,7 @@ export default function App() {
         }
         const data = (await res.json()) as { revision: number };
         revisionRef.current = data.revision;
+        lastPersistedFp.current = fp;
         setError(null);
         setSaveState("saved");
       } catch (err) {
@@ -229,11 +283,18 @@ export default function App() {
       if (applyingExternal.current) return;
       const id = activeIdRef.current;
       if (!id) return;
+
+      const fp = fingerprintScene(elements, appState, binaryFiles);
+      if (fp === lastPersistedFp.current) {
+        // Selection / pan / zoom only — do not schedule a save.
+        return;
+      }
+
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => {
         saveTimer.current = null;
         void persist(id, elements, appState, binaryFiles);
-      }, 400);
+      }, SAVE_DEBOUNCE_MS);
     },
     [persist],
   );

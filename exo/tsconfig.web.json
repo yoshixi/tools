@@ -9,7 +9,10 @@
     "skipLibCheck": true,
     "noEmit": true,
     "isolatedModules": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": {
+      "@exo/*": ["./src/*"]
+    }
   },
-  "include": ["web/src/**/*.ts", "web/src/**/*.tsx"]
+  "include": ["web/src/**/*.ts", "web/src/**/*.tsx", "src/persist-fingerprint.ts"]
 }
