@@ -3,9 +3,11 @@ import test from "node:test";
 import { helpText } from "./help.js";
 import { DEFAULT_HOST, DEFAULT_PORT } from "./state.js";
 
-test("help names the export command and its main flags", () => {
+test("help names start and export commands and export flags", () => {
   const text = helpText();
+  assert.match(text, /exo start \[options\] \[file-or-dir \.\.\.\]/);
   assert.match(text, /exo export <file\.excalidraw>/);
+  assert.match(text, /^ {2}start/m);
   assert.match(text, /-o, --output/);
   assert.match(text, /--format png\|svg/);
   assert.match(text, /--scale/);
@@ -38,8 +40,10 @@ test("help shows default port and bind address", () => {
   assert.match(text, new RegExp(DEFAULT_HOST.replace(/\./g, "\\.")));
 });
 
-test("help includes concrete export examples", () => {
+test("help includes concrete start and export examples", () => {
   const text = helpText();
+  assert.match(text, /exo\s+# this help/);
+  assert.match(text, /exo start sketch\.excalidraw/);
   assert.match(text, /exo export sketch\.excalidraw\s+# → sketch\.png/);
   assert.match(text, /exo export sketch\.excalidraw -o out\.svg/);
   assert.match(text, /--scale 3 --no-background/);

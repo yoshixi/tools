@@ -8,7 +8,8 @@ operator playbook in nix-darwin (`~/.ai/usecase/diagram.md` when installed).
 
 A local, mo-style Excalidraw editor:
 
-- CLI daemon opens `.excalidraw` JSON in the browser and saves back to disk
+- `exo start` runs (or reuses) a daemon that opens `.excalidraw` JSON in the browser
+- Bare `exo` only prints help — it does not start a server
 - One server = one **workspace folder** (sidebar stays inside that folder)
 - Headless `exo export` writes PNG/SVG with **no browser / Playwright**
 - Multi-tab safety: file **revisions**; stale saves get HTTP 409 and reload
@@ -23,7 +24,7 @@ that builds from this GitHub repo (`yoshixi/nix` → `pkgs/exo.nix`).
 | `src/` | Node CLI + HTTP server (TypeScript → `dist/`) |
 | `web/` | React + `@excalidraw/excalidraw` UI (Vite → `dist/client/`) |
 | `bin/exo.mjs` | Published bin entry (loads `dist/cli.js`) |
-| `src/help.ts` | Text for `exo -h` / `--help` (keep agent-discoverable) |
+| `src/help.ts` | Text for bare `exo` / `-h` / `--help` (keep agent-discoverable) |
 | `src/export.ts` | Headless PNG/SVG via `@moona3k/excalidraw-export` |
 | `test/e2e.mjs` | Playwright e2e (optional; not required for export) |
 
@@ -68,9 +69,9 @@ flowchart LR
   or “adopt for 1s” drops strokes drawn right after load. Flush pending saves on
   `pagehide` so a quick reload does not beat the debounce. File watchers must
   not re-announce when disk bytes match the last write.
-- **Help:** CLI discovery for agents is `exo --help`. If you add commands, flags,
-  or HTTP APIs agents need, update `src/help.ts` **and** its tests in
-  `src/help.test.ts` / `src/cli.export.test.ts`.
+- **Help:** CLI discovery for agents is bare `exo` or `exo --help`. If you add
+  commands, flags, or HTTP APIs agents need, update `src/help.ts` **and** its
+  tests in `src/help.test.ts` / `src/cli.export.test.ts`.
 
 ## Tests
 

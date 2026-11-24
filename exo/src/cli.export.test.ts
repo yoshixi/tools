@@ -37,6 +37,7 @@ function runCli(
 test("`exo --help` prints agent export and vision instructions", async () => {
   const { code, stdout } = await runCli(["--help"], process.cwd());
   assert.equal(code, 0);
+  assert.match(stdout, /exo start/);
   assert.match(stdout, /exo export/);
   assert.match(stdout, /POST \/api\/files\/:id\/export/);
   assert.match(stdout, /vision model/i);
@@ -48,6 +49,20 @@ test("`exo -h` prints the same help as --help", async () => {
   const short = await runCli(["-h"], process.cwd());
   assert.equal(short.code, 0);
   assert.equal(short.stdout, long.stdout);
+});
+
+test("bare `exo` prints help and does not start a server", async () => {
+  const { code, stdout, stderr } = await runCli([], process.cwd());
+  assert.equal(code, 0);
+  assert.equal(stderr, "");
+  assert.match(stdout, /exo start/);
+  assert.match(stdout, /exo export/);
+});
+
+test("`exo sketch.excalidraw` without start exits with a hint", async () => {
+  const { code, stderr } = await runCli(["sketch.excalidraw"], process.cwd());
+  assert.equal(code, 1);
+  assert.match(stderr, /exo start sketch\.excalidraw/);
 });
 
 test("`exo export` writes a PNG next to the drawing", async () => {

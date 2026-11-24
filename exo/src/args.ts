@@ -1,6 +1,6 @@
 import { DEFAULT_HOST, DEFAULT_PORT } from "./state.js";
 
-export type CliCommand = "open" | "export";
+export type CliCommand = "start" | "export" | null;
 
 export type ExportFormatArg = "png" | "svg";
 
@@ -28,7 +28,7 @@ export type CliArgs = {
 
 export function parseArgs(argv: readonly string[]): CliArgs {
   const args: CliArgs = {
-    command: "open",
+    command: null,
     paths: [],
     port: DEFAULT_PORT,
     host: DEFAULT_HOST,
@@ -48,8 +48,8 @@ export function parseArgs(argv: readonly string[]): CliArgs {
   };
 
   let i = 0;
-  if (argv[0] === "export") {
-    args.command = "export";
+  if (argv[0] === "export" || argv[0] === "start") {
+    args.command = argv[0];
     i = 1;
   }
 

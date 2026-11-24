@@ -1,30 +1,35 @@
 import { DEFAULT_HOST, DEFAULT_PORT } from "./state.js";
 
-/** Text printed by `exo -h` / `exo --help`. Written so agents can discover export. */
+/** Text printed by bare `exo`, `exo -h`, and `exo --help`. */
 export function helpText(): string {
   return `exo — local Excalidraw editor
 
 Usage:
-  exo [options] [file-or-dir ...]
+  exo                         Show this help
+  exo start [options] [file-or-dir ...]
   exo export <file.excalidraw> [export-options]
+  exo --status | --shutdown | -h | -v
 
-Open drawings in the browser, or export them to PNG/SVG without a browser.
-Each server is scoped to one workspace folder (the directory you start in, or
-a single directory argument like exo-files/). The sidebar only shows drawings
-inside that folder.
+Start a local server (or reuse one for this workspace) and open drawings in
+the browser, or export them to PNG/SVG without a browser. Each server is
+scoped to one workspace folder (the directory you start in, or a single
+directory argument like exo-files/). The sidebar only shows drawings inside
+that folder.
 
 Commands:
-  (default)            Start or reuse a local server and open files
+  start                Start or reuse a local server and open files
   export               Render a .excalidraw file to PNG or SVG (headless)
 
-Options:
+Start options:
   -p, --port <n>       Port (default ${DEFAULT_PORT}; other workspaces get a free port)
   -b, --bind <addr>    Bind address (default ${DEFAULT_HOST})
   -f, --foreground     Run server in the foreground
   -R, --recursive      Recurse into subdirectories when a directory is given
+      --open / --no-open  Open browser (default: open)
+
+Other:
       --status         Show running exo servers
       --shutdown       Shut down the server on the given port
-      --open / --no-open  Open browser (default: open)
   -h, --help           Show this help
   -v, --version        Show version
 
@@ -48,13 +53,15 @@ Agent workflow (check a drawing visually):
   3. Open that PNG with a vision model or image-read tool.
 
 Examples:
-  cd exo-files && exo            # workspace = exo-files; open drawings there
-  exo exo-files/                 # same from a parent directory
-  exo sketch.excalidraw
+  exo                              # this help
+  cd exo-files && exo start        # workspace = exo-files; open drawings there
+  exo start exo-files/             # same from a parent directory
+  exo start sketch.excalidraw
+  exo start --no-open --port 6290
   exo export sketch.excalidraw                 # → sketch.png
   exo export sketch.excalidraw -o out.svg
   exo export sketch.excalidraw --scale 3 --no-background
-  exo -R .
+  exo start -R .
   exo --status
   exo --shutdown
 `;
