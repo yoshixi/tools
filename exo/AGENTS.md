@@ -60,6 +60,9 @@ flowchart LR
   “suppress all watchers on save” without still announcing to other clients.
 - **Export:** Node-only. Agents check drawings by exporting PNG then using vision —
   not by driving Chromium. Prefer extending `export.ts` / `exo export` over e2e.
+- **Save thrashing:** Excalidraw `onChange` fires on selection/pan/zoom. Only PUT
+  when `persistFingerprint` of durable fields changes; remote updates should use
+  `updateScene` (not a full remount) so the canvas does not flash.
 - **Help:** CLI discovery for agents is `exo --help`. If you add commands, flags,
   or HTTP APIs agents need, update `src/help.ts` **and** its tests in
   `src/help.test.ts` / `src/cli.export.test.ts`.
