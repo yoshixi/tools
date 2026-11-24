@@ -587,6 +587,95 @@ test("GET / serves the built web UI", async () => {
   });
 });
 
+test("rewriting the same bytes after a PUT does not announce again", async () => {
+  const ws = tempWorkspace();
+  const port = await freePort();
+  const target = ws.writeDrawing("echo.excalidraw");
+  const id = fileIdForPath(target);
+
+  await withExoStateDir(ws.stateDir, async () => {
+    const server = await startServer({
+      host: "127.0.0.1",
+      port,
+      version: "test",
+      cwd: ws.dir,
+      initialPaths: [target],
+    });
+    try {
+      const announced: { revision: number }[] = [];
+      const controller = new AbortController();
+      void (async () => {
+        const res = await fetch(`${server.url}/api/events`, {
+          headers: { Accept: "text/event-stream" },
+          signal: controller.signal,
+        });
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentEvent = "message";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split("\n");
+          buffer = chunks.pop() ?? "";
+          for (const line of chunks) {
+            if (line.startsWith("event:")) {
+              currentEvent = line.slice("event:".length).trim();
+            } else if (
+              line.startsWith("data:") &&
+              currentEvent === "file-changed"
+            ) {
+              announced.push(
+                JSON.parse(line.slice("data:".length).trim()) as {
+                  revision: number;
+                },
+              );
+            } else if (line === "") {
+              currentEvent = "message";
+            }
+          }
+        }
+      })().catch(() => {});
+
+      const put = await fetch(`${server.url}/api/files/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          baseRevision: 1,
+          scene: {
+            type: "excalidraw",
+            version: 2,
+            source: "exo",
+            elements: [{ id: "echo", type: "rectangle" }],
+            appState: { viewBackgroundColor: "#ffffff" },
+            files: {},
+          },
+        }),
+      });
+      assert.equal(put.status, 200);
+
+      // Wait for the PUT announce, then past the ignore window.
+      await new Promise((r) => setTimeout(r, 200));
+      assert.ok(announced.some((e) => e.revision === 2));
+
+      const sameBytes = fs.readFileSync(target, "utf8");
+      await new Promise((r) => setTimeout(r, 900));
+      fs.writeFileSync(target, sameBytes);
+      await new Promise((r) => setTimeout(r, 600));
+
+      assert.equal(
+        announced.filter((e) => e.revision >= 3).length,
+        0,
+        "identical rewrite must not bump revision",
+      );
+      controller.abort();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 test("an external rewrite is announced even inside the post-save ignore window", async () => {
   const ws = tempWorkspace();
   const port = await freePort();

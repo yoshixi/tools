@@ -73,6 +73,9 @@ export default function App() {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const saveTimer = useRef<number | null>(null);
   const applyingExternal = useRef(false);
+  /** After load/updateScene, adopt Excalidraw's normalized fingerprint once. */
+  const adoptFingerprintOnce = useRef(false);
+  const suppressSavesUntil = useRef(0);
   const revisionRef = useRef<number | null>(null);
   const lastPersistedFp = useRef<string | null>(null);
   const activeIdRef = useRef(activeId);
@@ -85,6 +88,9 @@ export default function App() {
 
   const applyScene = useCallback((next: Scene, opts: { remount: boolean }) => {
     applyingExternal.current = true;
+    adoptFingerprintOnce.current = true;
+    // updateScene/onChange runs after paint — keep saves off until then.
+    suppressSavesUntil.current = Date.now() + 1000;
     lastPersistedFp.current = fingerprintScene(
       next.elements,
       next.appState,
@@ -106,9 +112,9 @@ export default function App() {
       setSceneKey((k) => k + 1);
     }
 
-    queueMicrotask(() => {
+    window.setTimeout(() => {
       applyingExternal.current = false;
-    });
+    }, 100);
   }, []);
 
   const loadScene = useCallback(
@@ -285,6 +291,18 @@ export default function App() {
       if (!id) return;
 
       const fp = fingerprintScene(elements, appState, binaryFiles);
+
+      // After GET/updateScene, Excalidraw normalizes elements. Adopt that
+      // fingerprint without PUT — otherwise we save→SSE→GET in a loop.
+      if (
+        adoptFingerprintOnce.current ||
+        Date.now() < suppressSavesUntil.current
+      ) {
+        lastPersistedFp.current = fp;
+        adoptFingerprintOnce.current = false;
+        return;
+      }
+
       if (fp === lastPersistedFp.current) {
         // Selection / pan / zoom only — do not schedule a save.
         return;
