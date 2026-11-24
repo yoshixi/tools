@@ -24,21 +24,22 @@ Or run without linking:
 
 ```bash
 pnpm start -- sketch.excalidraw
-# → node dist/cli.js sketch.excalidraw
+# → node dist/cli.js start sketch.excalidraw
 ```
 
 ## Usage
 
 ```bash
-cd exo-files && exo                   # workspace = exo-files; open drawings there
-exo exo-files/                        # same from a parent directory
-exo sketch.excalidraw                 # workspace = cwd; open one file
-exo -R .                              # cwd + nested dirs
+exo                                   # help
+cd exo-files && exo start             # workspace = exo-files; open drawings there
+exo start exo-files/                  # same from a parent directory
+exo start sketch.excalidraw           # workspace = cwd; open one file
+exo start -R .                        # cwd + nested dirs
 exo export sketch.excalidraw          # → sketch.png (no browser)
 exo export sketch.excalidraw -o out.svg
 exo --status
 exo --shutdown
-exo --foreground sketch.excalidraw    # foreground (debugging)
+exo start --foreground sketch.excalidraw    # foreground (debugging)
 ```
 
 Each running server is scoped to one **workspace folder**. The sidebar only
@@ -59,7 +60,7 @@ Under **More options** (hidden by default):
 CLI also creates missing files:
 
 ```bash
-exo sketch.excalidraw   # creates sketch.excalidraw if it does not exist
+exo start sketch.excalidraw   # creates sketch.excalidraw if it does not exist
 ```
 
 ## Formats

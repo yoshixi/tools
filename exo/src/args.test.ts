@@ -3,9 +3,31 @@ import test from "node:test";
 import { parseArgs } from "./args.js";
 import { DEFAULT_HOST, DEFAULT_PORT } from "./state.js";
 
-test("with no flags, defaults keep the browser open on the standard port", () => {
-  assert.deepEqual(parseArgs(["sketch.excalidraw"]), {
-    command: "open",
+test("bare argv has no command (CLI prints help)", () => {
+  assert.deepEqual(parseArgs([]), {
+    command: null,
+    paths: [],
+    port: DEFAULT_PORT,
+    host: DEFAULT_HOST,
+    foreground: false,
+    open: true,
+    status: false,
+    shutdown: false,
+    help: false,
+    version: false,
+    serve: false,
+    recursive: false,
+    cwd: null,
+    output: null,
+    exportFormat: null,
+    exportScale: 2,
+    exportBackground: true,
+  });
+});
+
+test("start with a file keeps the browser open on the standard port", () => {
+  assert.deepEqual(parseArgs(["start", "sketch.excalidraw"]), {
+    command: "start",
     paths: ["sketch.excalidraw"],
     port: DEFAULT_PORT,
     host: DEFAULT_HOST,
@@ -25,22 +47,29 @@ test("with no flags, defaults keep the browser open on the standard port", () =>
   });
 });
 
-test("-R enables recursive directory expansion", () => {
-  assert.equal(parseArgs(["-R", "."]).recursive, true);
+test("a path without start is still parsed as a path (CLI rejects it)", () => {
+  const args = parseArgs(["sketch.excalidraw"]);
+  assert.equal(args.command, null);
+  assert.deepEqual(args.paths, ["sketch.excalidraw"]);
+});
+
+test("start -R enables recursive directory expansion", () => {
+  assert.equal(parseArgs(["start", "-R", "."]).recursive, true);
 });
 
 test("combined short flags like -Rf set recursive and foreground", () => {
-  const args = parseArgs(["-Rf", "."]);
+  const args = parseArgs(["start", "-Rf", "."]);
+  assert.equal(args.command, "start");
   assert.equal(args.recursive, true);
   assert.equal(args.foreground, true);
 });
 
 test("--no-open disables opening the browser", () => {
-  assert.equal(parseArgs(["--no-open", "a.excalidraw"]).open, false);
+  assert.equal(parseArgs(["start", "--no-open", "a.excalidraw"]).open, false);
 });
 
 test("--port overrides the listen port", () => {
-  assert.equal(parseArgs(["--port", "7001", "a.excalidraw"]).port, 7001);
+  assert.equal(parseArgs(["start", "--port", "7001", "a.excalidraw"]).port, 7001);
 });
 
 test("an unknown flag is rejected", () => {
@@ -55,6 +84,7 @@ test("-h and --help set the help flag", () => {
   assert.equal(parseArgs(["-h"]).help, true);
   assert.equal(parseArgs(["--help"]).help, true);
   assert.equal(parseArgs(["export", "--help"]).help, true);
+  assert.equal(parseArgs(["start", "--help"]).help, true);
 });
 
 test("export subcommand parses output format and scale", () => {

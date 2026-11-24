@@ -68,11 +68,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.command !== "start") {
+    if (args.paths.length > 0) {
+      throw new Error(
+        `missing command. Try:\n  exo start ${args.paths.join(" ")}\n  exo export <file.excalidraw>\n  exo --help`,
+      );
+    }
+    console.log(helpText());
+    return;
+  }
+
+  await runStart(args);
+}
+
+async function runStart(args: CliArgs): Promise<void> {
   const workspace = inferWorkspace(args.paths, process.cwd());
-  const expandRoots =
-    args.paths.length === 0
-      ? ["."]
-      : args.paths;
+  const expandRoots = args.paths.length === 0 ? ["."] : args.paths;
 
   // Expand relative to process cwd so relative file args keep working; a single
   // directory arg is already absolute-resolved by expandInputPaths.
@@ -82,7 +93,7 @@ async function main(): Promise<void> {
   });
 
   // Explicit directory/file args that match nothing are an error. A bare
-  // `exo` in an empty workspace is fine — create drawings from the UI.
+  // `exo start` in an empty workspace is fine — create drawings from the UI.
   if (args.paths.length > 0 && absPaths.length === 0) {
     throw new Error(
       args.recursive
