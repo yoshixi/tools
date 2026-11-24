@@ -36,7 +36,7 @@ pnpm install
 pnpm build          # web + cli (clears dist/)
 pnpm typecheck
 pnpm test           # build:test + node:test (needs dist/client → run build first in CI)
-pnpm test:e2e       # Playwright; only when changing real browser UX
+pnpm test:e2e       # Playwright (Chromium); includes no-reload GET spam check
 ```
 
 Node **≥ 24**. Package manager: **pnpm** (see `packageManager` in `package.json`).
@@ -63,6 +63,9 @@ flowchart LR
 - **Save thrashing:** Excalidraw `onChange` fires on selection/pan/zoom. Only PUT
   when `persistFingerprint` of durable fields changes; remote updates should use
   `updateScene` (not a full remount) so the canvas does not flash.
+- **Reload loops:** After apply/load, adopt Excalidraw’s normalized fingerprint
+  once (no PUT). File watchers must not re-announce when disk bytes match the
+  last write — that was causing repeated `GET /api/files/:id` and canvas refresh.
 - **Help:** CLI discovery for agents is `exo --help`. If you add commands, flags,
   or HTTP APIs agents need, update `src/help.ts` **and** its tests in
   `src/help.test.ts` / `src/cli.export.test.ts`.

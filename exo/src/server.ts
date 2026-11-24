@@ -116,16 +116,22 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       awaitWriteFinish: { stabilityThreshold: 200 },
     });
     w.on("change", () => {
+      let current: string;
+      try {
+        current = fs.readFileSync(absPath, "utf8");
+      } catch {
+        return;
+      }
+      // Same bytes as last PUT/announce — ignore echo and macOS double-fires
+      // (those were bumping revision and forcing the UI to GET+reload forever).
+      if (current === lastWritePayload.get(absPath)) return;
+
       const until = ignoreWatchUntil.get(absPath) ?? 0;
       if (Date.now() < until) {
-        try {
-          const current = fs.readFileSync(absPath, "utf8");
-          // Same bytes we just PUT — already announced; skip chokidar duplicate.
-          if (current === lastWritePayload.get(absPath)) return;
-        } catch {
-          return;
-        }
+        // Inside the post-PUT window but content differs → real external write.
       }
+
+      lastWritePayload.set(absPath, current);
       const revision = bumpRevision(absPath);
       announceFileChanged(absPath, revision);
     });

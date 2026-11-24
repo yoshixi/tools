@@ -57,7 +57,7 @@ async function waitForStatus(url, timeoutMs = 8000) {
   throw new Error(`server not ready: ${url}`);
 }
 
-function startDaemon({ port, stateDir, drawing }) {
+function startDaemon({ port, stateDir, workspaceDir }) {
   const child = spawn(
     process.execPath,
     [
@@ -67,9 +67,11 @@ function startDaemon({ port, stateDir, drawing }) {
       String(port),
       "--bind",
       "127.0.0.1",
+      "--cwd",
+      workspaceDir,
     ],
     {
-      cwd: root,
+      cwd: workspaceDir,
       env: { ...process.env, EXO_STATE_DIR: stateDir },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -100,7 +102,7 @@ fs.writeFileSync(drawing, `${JSON.stringify(emptyScene(), null, 2)}\n`);
 
 const port = await freePort();
 const url = `http://127.0.0.1:${port}`;
-const daemon = startDaemon({ port, stateDir, drawing });
+const daemon = startDaemon({ port, stateDir, workspaceDir: workspace });
 
 let browser;
 try {
@@ -164,11 +166,48 @@ try {
     assert.ok(live.length > beforeCount);
   });
 
-  await step("an external edit reloads into the open canvas", async () => {
-    const previousKey = await page
-      .locator(".canvas-wrap")
-      .getAttribute("data-scene-key");
+  await step(
+    "idle interaction does not keep GETting /api/files/:id",
+    async () => {
+      let sceneGets = 0;
+      const onRequest = (req) => {
+        if (req.method() !== "GET") return;
+        let pathname;
+        try {
+          pathname = new URL(req.url()).pathname;
+        } catch {
+          return;
+        }
+        // /api/files/<id> only — not /api/files or /api/files/<id>/export
+        if (/^\/api\/files\/[^/]+$/.test(pathname)) sceneGets += 1;
+      };
+      page.on("request", onRequest);
 
+      await page.goto(`${url}/?file=${fileId}`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForSelector(".excalidraw", { timeout: 30000 });
+      // Allow the initial load + soft settle.
+      await page.waitForTimeout(1500);
+      const afterLoad = sceneGets;
+
+      const drawSurface = page.locator("canvas.excalidraw__canvas.interactive");
+      await drawSurface.click({
+        position: { x: 40, y: 40 },
+        force: true,
+      });
+      await page.waitForTimeout(2500);
+
+      page.off("request", onRequest);
+      assert.equal(
+        sceneGets,
+        afterLoad,
+        `expected no extra scene GETs after idle/click (had ${sceneGets - afterLoad})`,
+      );
+    },
+  );
+
+  await step("an external edit shows up on the open canvas", async () => {
     const stamped = {
       type: "excalidraw",
       version: 2,
@@ -208,21 +247,18 @@ try {
     };
     fs.writeFileSync(drawing, `${JSON.stringify(stamped, null, 2)}\n`);
 
+    // Soft update keeps scene-key stable; element count is the observable signal.
     await page.waitForFunction(
-      (prev) => {
+      () => {
         const el = document.querySelector(".canvas-wrap");
-        return (
-          !!el &&
-          el.getAttribute("data-scene-key") !== prev &&
-          el.getAttribute("data-element-count") === "1"
-        );
+        return !!el && el.getAttribute("data-element-count") === "1";
       },
-      previousKey,
+      undefined,
       { timeout: 10000 },
     );
   });
 
-  console.log(`\n${3} e2e steps passed`);
+  console.log(`\n${4} e2e steps passed`);
 } catch (err) {
   console.error("\nnot ok - e2e failed");
   console.error(err);
