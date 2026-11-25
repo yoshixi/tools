@@ -363,7 +363,115 @@ try {
     );
   });
 
-  console.log(`\n${6} e2e steps passed`);
+  await step(
+    "switching files does not copy the previous scene onto the next file",
+    async () => {
+      const alphaPath = path.join(workspace, "alpha.excalidraw");
+      const betaPath = path.join(workspace, "beta.excalidraw");
+      const alphaScene = {
+        type: "excalidraw",
+        version: 2,
+        source: "exo-e2e",
+        elements: [
+          {
+            id: "alpha-only-rect",
+            type: "rectangle",
+            x: 10,
+            y: 10,
+            width: 120,
+            height: 80,
+            angle: 0,
+            strokeColor: "#e03131",
+            backgroundColor: "#ffa8a8",
+            fillStyle: "solid",
+            strokeWidth: 2,
+            strokeStyle: "solid",
+            roughness: 1,
+            opacity: 100,
+            groupIds: [],
+            frameId: null,
+            index: "a0",
+            roundness: null,
+            seed: 3,
+            version: 1,
+            versionNonce: 3,
+            isDeleted: false,
+            boundElements: null,
+            updated: Date.now(),
+            link: null,
+            locked: false,
+          },
+        ],
+        appState: { viewBackgroundColor: "#ffffff" },
+        files: {},
+      };
+      fs.writeFileSync(alphaPath, `${JSON.stringify(alphaScene, null, 2)}\n`);
+      fs.writeFileSync(betaPath, `${JSON.stringify(emptyScene(), null, 2)}\n`);
+
+      const addedAlpha = await addFile(url, alphaPath);
+      const addedBeta = await addFile(url, betaPath);
+      const alphaId = addedAlpha.files.find(
+        (f) => f.name === "alpha.excalidraw",
+      )?.id;
+      const betaId = addedBeta.files.find(
+        (f) => f.name === "beta.excalidraw",
+      )?.id;
+      assert.ok(alphaId && betaId);
+
+      await page.goto(`${url}/?file=${alphaId}`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForSelector(".excalidraw", { timeout: 30000 });
+      await page.waitForFunction(
+        (id) => {
+          const el = document.querySelector(".canvas-wrap");
+          return (
+            !!el &&
+            el.getAttribute("data-file-id") === id &&
+            el.getAttribute("data-element-count") === "1"
+          );
+        },
+        alphaId,
+        { timeout: 10000 },
+      );
+
+      await page
+        .locator(".file-list .file-name", { hasText: "beta.excalidraw" })
+        .click();
+      await page.waitForFunction(
+        (id) => {
+          const el = document.querySelector(".canvas-wrap");
+          return !!el && el.getAttribute("data-file-id") === id;
+        },
+        betaId,
+        { timeout: 10000 },
+      );
+      // Give any mistaken cross-file PUT time to land.
+      await page.waitForTimeout(1500);
+
+      const beta = JSON.parse(fs.readFileSync(betaPath, "utf8"));
+      const betaLive = (beta.elements ?? []).filter((el) => !el.isDeleted);
+      assert.equal(
+        betaLive.length,
+        0,
+        "beta must stay empty after switching away from alpha",
+      );
+      assert.equal(
+        betaLive.some((el) => el.id === "alpha-only-rect"),
+        false,
+      );
+
+      const alpha = JSON.parse(fs.readFileSync(alphaPath, "utf8"));
+      assert.ok(
+        (alpha.elements ?? []).some(
+          (el) => el.id === "alpha-only-rect" && !el.isDeleted,
+        ),
+        "alpha must keep its own scene",
+      );
+    },
+  );
+
+  console.log(`\n${7} e2e steps passed`);
 } catch (err) {
   console.error("\nnot ok - e2e failed");
   console.error(err);

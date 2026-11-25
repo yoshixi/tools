@@ -93,6 +93,8 @@ export default function App() {
   const revisionRef = useRef<number | null>(null);
   const lastPersistedFp = useRef<string | null>(null);
   const lastContentKey = useRef<string | null>(null);
+  /** File id whose scene is currently loaded — ignore onChange until set. */
+  const loadedIdRef = useRef<string | null>(null);
   const pendingPersist = useRef<{
     id: string;
     elements: readonly ExcalidrawElement[];
@@ -107,41 +109,51 @@ export default function App() {
     [files, activeId],
   );
 
-  const applyScene = useCallback((next: Scene, opts: { remount: boolean }) => {
-    applyingExternal.current = true;
-    // Delay scheduled PUTs until Excalidraw finishes normalize onChanges.
-    suppressSavesUntil.current = Date.now() + 1000;
-    pendingPersist.current = null;
-    lastPersistedFp.current = fingerprintScene(
-      next.elements,
-      next.appState,
-      next.files,
-    );
-    lastContentKey.current = contentKeyScene(
-      next.elements,
-      next.appState,
-      next.files,
-    );
-    setScene(next);
+  const applyScene = useCallback(
+    (id: string, next: Scene, opts: { remount: boolean }) => {
+      // Drop stale loads after a fast tab switch.
+      if (activeIdRef.current !== id) return;
 
-    const api = apiRef.current;
-    if (!opts.remount && api) {
-      // Soft update — keep camera/selection; avoids full canvas flash.
-      api.updateScene({
-        elements: next.elements,
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-      if (next.files && Object.keys(next.files).length > 0) {
-        api.addFiles(Object.values(next.files));
+      applyingExternal.current = true;
+      // Delay scheduled PUTs until Excalidraw finishes normalize onChanges.
+      suppressSavesUntil.current = Date.now() + 1000;
+      // Do not clear a pending PUT for a *different* file — flush handles that.
+      if (pendingPersist.current?.id === id) {
+        pendingPersist.current = null;
       }
-    } else {
-      setSceneKey((k) => k + 1);
-    }
+      lastPersistedFp.current = fingerprintScene(
+        next.elements,
+        next.appState,
+        next.files,
+      );
+      lastContentKey.current = contentKeyScene(
+        next.elements,
+        next.appState,
+        next.files,
+      );
+      loadedIdRef.current = id;
+      setScene(next);
 
-    window.setTimeout(() => {
-      applyingExternal.current = false;
-    }, 100);
-  }, []);
+      const api = apiRef.current;
+      if (!opts.remount && api) {
+        // Soft update — keep camera/selection; avoids full canvas flash.
+        api.updateScene({
+          elements: next.elements,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        if (next.files && Object.keys(next.files).length > 0) {
+          api.addFiles(Object.values(next.files));
+        }
+      } else {
+        setSceneKey((k) => k + 1);
+      }
+
+      window.setTimeout(() => {
+        applyingExternal.current = false;
+      }, 100);
+    },
+    [],
+  );
 
   const loadScene = useCallback(
     async (id: string, opts: { remount: boolean }) => {
@@ -154,10 +166,122 @@ export default function App() {
         throw new Error(body?.error ?? `failed to load ${id}`);
       }
       const data = (await res.json()) as { scene: Scene; revision: number };
+      // Another tab was selected while this fetch was in flight.
+      if (activeIdRef.current !== id) return;
       revisionRef.current = data.revision;
-      applyScene(data.scene, opts);
+      applyScene(id, data.scene, opts);
     },
     [applyScene],
+  );
+
+  const persist = useCallback(
+    async (
+      id: string,
+      elements: readonly ExcalidrawElement[],
+      appState: AppState,
+      binaryFiles: BinaryFiles,
+      opts?: { keepalive?: boolean },
+    ) => {
+      const fp = fingerprintScene(elements, appState, binaryFiles);
+      // For the active file, skip no-op fingerprints. Flushes for a previous
+      // tab must still run even after loadedIdRef moved on.
+      if (
+        !opts?.keepalive &&
+        id === loadedIdRef.current &&
+        fp === lastPersistedFp.current
+      ) {
+        return;
+      }
+
+      if (!opts?.keepalive) setSaveState("saving");
+      try {
+        const body = {
+          // Only the active file's revision lives in revisionRef. A flushed
+          // previous-tab save omits baseRevision so the server accepts it.
+          ...(id === loadedIdRef.current
+            ? { baseRevision: revisionRef.current }
+            : {}),
+          scene: {
+            type: "excalidraw" as const,
+            version: 2,
+            source: "exo",
+            elements,
+            appState: durableAppState(appState),
+            files: binaryFiles,
+          },
+        };
+        const res = await fetch(`/api/files/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          keepalive: opts?.keepalive === true,
+        });
+        if (res.status === 409) {
+          if (opts?.keepalive) return;
+          if (activeIdRef.current === id) {
+            await loadScene(id, { remount: false });
+          }
+          setSaveState("idle");
+          setError("Reloaded — another tab had a newer version");
+          return;
+        }
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "save failed");
+        }
+        const data = (await res.json()) as { revision: number };
+        if (pendingPersist.current?.id === id) {
+          pendingPersist.current = null;
+        }
+        // Only adopt revision/fingerprint if this file is still on screen.
+        if (loadedIdRef.current === id) {
+          revisionRef.current = data.revision;
+          lastPersistedFp.current = fp;
+        }
+        if (opts?.keepalive) return;
+        setError(null);
+        setSaveState("saved");
+      } catch (err) {
+        if (opts?.keepalive) return;
+        setSaveState("error");
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [loadScene],
+  );
+
+  const flushPendingPersist = useCallback(
+    (opts?: { keepalive?: boolean }) => {
+      if (saveTimer.current !== null) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      const pending = pendingPersist.current;
+      if (!pending) return;
+      pendingPersist.current = null;
+      void persist(
+        pending.id,
+        pending.elements,
+        pending.appState,
+        pending.binaryFiles,
+        opts,
+      );
+    },
+    [persist],
+  );
+
+  const selectFile = useCallback(
+    (fileId: string) => {
+      if (fileId === activeIdRef.current) return;
+      // Write the current tab first so its scene cannot land on the next file.
+      flushPendingPersist({ keepalive: true });
+      loadedIdRef.current = null;
+      setActiveId(fileId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("file", fileId);
+      window.history.replaceState({}, "", url);
+    },
+    [flushPendingPersist],
   );
 
   useEffect(() => {
@@ -193,8 +317,13 @@ export default function App() {
       setScene(null);
       lastPersistedFp.current = null;
       lastContentKey.current = null;
+      loadedIdRef.current = null;
       return;
     }
+    // Ignore the previous Excalidraw instance until this file's GET finishes.
+    // Clear scene so the new tab id is not briefly painted with the old drawing.
+    loadedIdRef.current = null;
+    setScene(null);
     let cancelled = false;
     (async () => {
       try {
@@ -254,65 +383,6 @@ export default function App() {
     };
   }, []);
 
-  const persist = useCallback(
-    async (
-      id: string,
-      elements: readonly ExcalidrawElement[],
-      appState: AppState,
-      binaryFiles: BinaryFiles,
-      opts?: { keepalive?: boolean },
-    ) => {
-      const fp = fingerprintScene(elements, appState, binaryFiles);
-      if (fp === lastPersistedFp.current) {
-        return;
-      }
-
-      if (!opts?.keepalive) setSaveState("saving");
-      try {
-        const body = {
-          baseRevision: revisionRef.current,
-          scene: {
-            type: "excalidraw" as const,
-            version: 2,
-            source: "exo",
-            elements,
-            appState: durableAppState(appState),
-            files: binaryFiles,
-          },
-        };
-        const res = await fetch(`/api/files/${encodeURIComponent(id)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          keepalive: opts?.keepalive === true,
-        });
-        if (res.status === 409) {
-          if (opts?.keepalive) return;
-          await loadScene(id, { remount: false });
-          setSaveState("idle");
-          setError("Reloaded — another tab had a newer version");
-          return;
-        }
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || "save failed");
-        }
-        const data = (await res.json()) as { revision: number };
-        revisionRef.current = data.revision;
-        lastPersistedFp.current = fp;
-        pendingPersist.current = null;
-        if (opts?.keepalive) return;
-        setError(null);
-        setSaveState("saved");
-      } catch (err) {
-        if (opts?.keepalive) return;
-        setSaveState("error");
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [loadScene],
-  );
-
   const schedulePersist = useCallback(
     (
       id: string,
@@ -322,8 +392,8 @@ export default function App() {
     ) => {
       pendingPersist.current = { id, elements, appState, binaryFiles };
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-      // Wait out the post-apply settle window so late normalize bursts coalesce,
-      // then apply the usual debounce from "now".
+      // Do not PUT during the post-apply settle window (normalize coalescing),
+      // but never wait longer than max(settle, debounce).
       const settleMs = Math.max(0, suppressSavesUntil.current - Date.now());
       saveTimer.current = window.setTimeout(() => {
         saveTimer.current = null;
@@ -341,34 +411,27 @@ export default function App() {
   );
 
   useEffect(() => {
-    const flush = () => {
-      if (saveTimer.current !== null) {
-        window.clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
-      const pending = pendingPersist.current;
-      if (!pending) return;
-      void persist(
-        pending.id,
-        pending.elements,
-        pending.appState,
-        pending.binaryFiles,
-        { keepalive: true },
-      );
-    };
+    const flush = () => flushPendingPersist({ keepalive: true });
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
-  }, [persist]);
+  }, [flushPendingPersist]);
 
-  const onChange = useCallback(
+  const onChangeForFile = useCallback(
     (
+      fileId: string,
       elements: readonly ExcalidrawElement[],
       appState: AppState,
       binaryFiles: BinaryFiles,
     ) => {
       if (applyingExternal.current) return;
-      const id = activeIdRef.current;
-      if (!id) return;
+      // Bind fileId from the mounted Excalidraw instance (render closure), not
+      // activeIdRef — an unmounting canvas can fire after the next tab loaded.
+      if (
+        fileId !== loadedIdRef.current ||
+        fileId !== activeIdRef.current
+      ) {
+        return;
+      }
 
       const fp = fingerprintScene(elements, appState, binaryFiles);
       const contentKey = contentKeyScene(elements, appState, binaryFiles);
@@ -377,7 +440,12 @@ export default function App() {
       // load/updateScene. Never mark a pending edit as already persisted.
       if (contentKey === lastContentKey.current) {
         if (pendingPersist.current !== null) {
-          pendingPersist.current = { id, elements, appState, binaryFiles };
+          pendingPersist.current = {
+            id: fileId,
+            elements,
+            appState,
+            binaryFiles,
+          };
           return;
         }
         lastPersistedFp.current = fp;
@@ -390,7 +458,7 @@ export default function App() {
       }
 
       lastContentKey.current = contentKey;
-      schedulePersist(id, elements, appState, binaryFiles);
+      schedulePersist(fileId, elements, appState, binaryFiles);
     },
     [schedulePersist],
   );
@@ -417,10 +485,7 @@ export default function App() {
           open={addOpen}
           onClose={() => setAddOpen(false)}
           onOpened={(fileId) => {
-            setActiveId(fileId);
-            const url = new URL(window.location.href);
-            url.searchParams.set("file", fileId);
-            window.history.replaceState({}, "", url);
+            selectFile(fileId);
           }}
         />
         <ul className="file-list">
@@ -429,12 +494,7 @@ export default function App() {
               <button
                 type="button"
                 className={`file-open ${file.id === activeId ? "active" : ""}`}
-                onClick={() => {
-                  setActiveId(file.id);
-                  const url = new URL(window.location.href);
-                  url.searchParams.set("file", file.id);
-                  window.history.replaceState({}, "", url);
-                }}
+                onClick={() => selectFile(file.id)}
                 title={file.path}
               >
                 <span className="file-name">{file.name}</span>
@@ -459,10 +519,7 @@ export default function App() {
                       if (!res.ok || !body.opened) {
                         throw new Error(body.error ?? "copy failed");
                       }
-                      setActiveId(body.opened.id);
-                      const url = new URL(window.location.href);
-                      url.searchParams.set("file", body.opened.id);
-                      window.history.replaceState({}, "", url);
+                      selectFile(body.opened.id);
                     } catch (err) {
                       setError(
                         err instanceof Error ? err.message : String(err),
@@ -503,7 +560,7 @@ export default function App() {
             <div>
               <strong>No drawing open</strong>
               Use <em>Add file…</em> or run{" "}
-              <code>exo sketch.excalidraw</code>.
+              <code>exo start sketch.excalidraw</code>.
             </div>
           </div>
         ) : (
@@ -521,7 +578,14 @@ export default function App() {
               files: scene.files,
               scrollToContent: true,
             }}
-            onChange={onChange}
+            onChange={(elements, appState, binaryFiles) => {
+              onChangeForFile(
+                activeFile.id,
+                elements,
+                appState,
+                binaryFiles,
+              );
+            }}
             name={activeFile.name}
           />
         )}

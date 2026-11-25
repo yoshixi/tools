@@ -69,6 +69,10 @@ flowchart LR
   or “adopt for 1s” drops strokes drawn right after load. Flush pending saves on
   `pagehide` so a quick reload does not beat the debounce. File watchers must
   not re-announce when disk bytes match the last write.
+- **File tabs:** On switch, flush the previous file, clear `loadedIdRef`, and
+  ignore `onChange` until the new file’s GET applies. Otherwise the old canvas
+  can PUT its scene into the newly selected file (no undo). Stale GETs must not
+  `applyScene` after `activeId` has moved on.
 - **Help:** CLI discovery for agents is bare `exo` or `exo --help`. If you add
   commands, flags, or HTTP APIs agents need, update `src/help.ts` **and** its
   tests in `src/help.test.ts` / `src/cli.export.test.ts`.
